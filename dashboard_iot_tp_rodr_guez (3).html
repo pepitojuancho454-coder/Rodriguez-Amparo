@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TP control con IOT RODRÍGUEZ</title>
+    <!-- Tailwind CSS para diseño moderno y responsivo -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Librería MQTT.js para conexión MQTT en el navegador -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- Fuente Inter y JetBrains Mono para telemetría -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Slate 900 */
+            color: #f8fafc;
+        }
+        .font-mono-tech {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        /* Efecto de brillo sutil para las tarjetas de telemetría */
+        .telemetry-card {
+            background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+        }
+        /* Animación de pulso para el indicador de conexión */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.8; }
+            100% { transform: scale(2); opacity: 0; }
+        }
+        .status-pulse::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 9999px;
+            background-color: inherit;
+            animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between p-4 sm:p-6 md:p-8 selection:bg-cyan-500 selection:text-white">
+
+    <!-- Contenedor Principal Centrado -->
+    <main class="w-full max-w-2xl mx-auto space-y-6">
+
+        <!-- 1. TÍTULO PRINCIPAL (Consigna exacta) -->
+        <header class="text-center space-y-2 pt-2">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-xs font-medium text-cyan-400 mb-1">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                </svg>
+                <span>SISTEMA DE TELEMETRÍA Y CONTROL</span>
+            </div>
+            <h1 class="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight text-white">
+                TP control con IOT RODRÍGUEZ
+            </h1>
+        </header>
+
+        <!-- Notificación flotante (reemplazo elegante de alert) -->
+        <div id="toast-box" class="hidden fixed top-4 right-4 z-50 max-w-sm bg-slate-800 border-l-4 border-cyan-500 text-slate-100 px-4 py-3 rounded-lg shadow-2xl transition-all duration-300 flex items-center gap-3">
+            <span id="toast-icon" class="text-cyan-400">ℹ️</span>
+            <p id="toast-message" class="text-sm font-medium"></p>
+        </div>
+
+        <!-- 2. TARJETA PRINCIPAL DE CONTROL (Estructura solicitada: Temperatura -> Valor -> Botones Abrir/Cerrar) -->
+        <section class="telemetry-card border border-slate-700/80 rounded-2xl p-6 sm:p-8 text-center relative overflow-hidden">
+            <!-- Barra superior de estado dentro de la tarjeta -->
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-6 mb-6 border-b border-slate-800">
+                <div class="flex items-center gap-2.5">
+                    <span id="status-dot" class="relative flex h-3 w-3 rounded-full bg-rose-500"></span>
+                    <span id="status-text" class="text-xs sm:text-sm font-semibold text-slate-300">Desconectado del Broker</span>
+                </div>
+
+                <!-- Switch de Modo Simulación para pruebas sin hardware -->
+                <label class="inline-flex items-center cursor-pointer select-none">
+                    <input type="checkbox" id="sim-toggle" class="sr-only peer">
+                    <div class="relative w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                    <span class="ms-2 text-xs font-medium text-slate-400 peer-checked:text-amber-400">Modo Simulación</span>
+                </label>
+            </div>
+
+            <!-- 3. PALABRA TEMPERATURA (Debajo del título) -->
+            <div class="space-y-2">
+                <h2 class="text-lg sm:text-xl font-bold uppercase tracking-widest text-slate-400">
+                    Temperatura
+                </h2>
+
+                <!-- 4. VALOR DE LA TEMPERATURA RECIBIDO EN EL TÓPICO -->
+                <div class="py-4 flex flex-col items-center justify-center">
+                    <div class="inline-flex items-baseline justify-center px-8 py-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-inner">
+                        <span id="temp-value" class="font-mono-tech text-5xl sm:text-6xl font-bold text-cyan-400 tracking-tight">
+                            --
+                        </span>
+                        <span class="font-mono-tech text-2xl sm:text-3xl font-semibold text-slate-400 ml-2">
+                            °C
+                        </span>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-2 font-mono-tech">
+                        Tópico: <span id="display-temp-topic" class="text-slate-400">tp/rodriguez/temperatura</span>
+                    </p>
+                </div>
+            </div>
+
+            <!-- 5. DOS BOTONES: ABRIR ("1") Y CERRAR ("0") AL TÓPICO DEL SERVO -->
+            <div class="pt-6 mt-4 border-t border-slate-800/80">
+                <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-4">
+                    Control de Servomotor (<span id="display-servo-topic" class="font-mono-tech text-slate-300 lowercase">tp/rodriguez/servo</span>)
+                </p>
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <!-- Botón ABRIR -> Envía "1" -->
+                    <button id="btn-abrir" type="button"
+                        class="group relative flex items-center justify-center gap-3 w-full py-4 px-6 rounded-xl font-bold text-lg text-white bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] transition-all duration-150 shadow-lg shadow-emerald-950/50 border border-emerald-400/30 cursor-pointer">
+                        <svg class="w-6 h-6 transition-transform group-hover:rotate-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"></path>
+                        </svg>
+                        <span>Abrir</span>
+                        <span class="text-xs font-mono-tech bg-emerald-800/80 px-2 py-0.5 rounded text-emerald-200 border border-emerald-500/30">
+                            "1"
+                        </span>
+                    </button>
+
+                    <!-- Botón CERRAR -> Envía "0" -->
+                    <button id="btn-cerrar" type="button"
+                        class="group relative flex items-center justify-center gap-3 w-full py-4 px-6 rounded-xl font-bold text-lg text-white bg-rose-600 hover:bg-rose-500 active:scale-[0.98] transition-all duration-150 shadow-lg shadow-rose-950/50 border border-rose-400/30 cursor-pointer">
+                        <svg class="w-6 h-6 transition-transform group-hover:-rotate-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                        </svg>
+                        <span>Cerrar</span>
+                        <span class="text-xs font-mono-tech bg-rose-800/80 px-2 py-0.5 rounded text-rose-200 border border-rose-500/30">
+                            "0"
+                        </span>
+                    </button>
+                </div>
+
+                <!-- Indicador visual del último estado enviado al servo -->
+                <div class="mt-4 text-xs text-slate-400">
+                    Última orden enviada: <span id="servo-last-state" class="font-mono-tech font-semibold text-slate-200">Ninguna</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- 6. PANEL DE CONFIGURACIÓN DEL BROKER MQTT Y TÓPICOS -->
+        <section class="bg-slate-800/60 border border-slate-700/80 rounded-2xl p-5 sm:p-6 space-y-4">
+            <div class="flex items-center justify-between">
+                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-200 flex items-center gap-2">
+                    <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                    Configuración de Red MQTT
+                </h3>
+                <span class="text-[11px] font-mono-tech text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                    ESP32 TCP: 1883 | Web WS: 8083/8084
+                </span>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <!-- Dirección del Broker -->
+                <div class="sm:col-span-2">
+                    <label for="broker-host" class="block text-xs font-medium text-slate-400 mb-1">Dirección del Broker MQTT</label>
+                    <input type="text" id="broker-host" value="broker.emqx.io" placeholder="ej. broker.emqx.io o 192.168.1.50"
+                        class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white font-mono-tech focus:outline-none focus:border-cyan-500">
+                </div>
+
+                <!-- Puerto WebSocket -->
+                <div>
+                    <label for="broker-port" class="block text-xs font-medium text-slate-400 mb-1">Puerto WebSocket</label>
+                    <input type="number" id="broker-port" value="8084" placeholder="8083 / 8084"
+                        class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white font-mono-tech focus:outline-none focus:border-cyan-500">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <!-- Tópico Temperatura -->
+                <div>
+                    <label for="topic-temp" class="block text-xs font-medium text-slate-400 mb-1">Tópico Temperatura (Suscripción)</label>
+                    <input type="text" id="topic-temp" value="tp/rodriguez/temperatura" placeholder="tp/rodriguez/temperatura"
+                        class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-cyan-300 font-mono-tech focus:outline-none focus:border-cyan-500">
+                </div>
+
+                <!-- Tópico Servo -->
+                <div>
+                    <label for="topic-servo" class="block text-xs font-medium text-slate-400 mb-1">Tópico Servo (Publicación)</label>
+                    <input type="text" id="topic-servo" value="tp/rodriguez/servo" placeholder="tp/rodriguez/servo"
+                        class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-emerald-300 font-mono-tech focus:outline-none focus:border-cyan-500">
+                </div>
+            </div>
+
+            <!-- Nota técnica educativa sobre el puerto 1883 vs WebSockets -->
+            <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-700/70 text-xs text-slate-400 leading-relaxed flex gap-2.5 items-start">
+                <span class="text-cyan-400 text-base leading-none">💡</span>
+                <p>
+                    <strong class="text-slate-200">Nota de Robótica / Redes:</strong> Tu placa (ESP32/Arduino) se conecta al puerto <code class="text-cyan-400">1883</code> (MQTT TCP puro). Sin embargo, por seguridad los navegadores web utilizan <strong>MQTT sobre WebSockets</strong> (puerto <code class="text-cyan-400">8083</code> sin SSL o <code class="text-cyan-400">8084</code> con SSL/WSS en brokers como EMQX/Mosquitto) comunicándose exactamente con los mismos tópicos.
+                </p>
+            </div>
+
+            <!-- Botón Conectar / Desconectar -->
+            <div class="pt-1 flex justify-end">
+                <button id="btn-connect" type="button"
+                    class="w-full sm:w-auto px-6 py-2.5 rounded-xl font-semibold text-sm bg-cyan-600 hover:bg-cyan-500 text-white transition-colors shadow-md cursor-pointer">
+                    Conectar al Broker
+                </button>
+            </div>
+        </section>
+
+        <!-- 7. CONSOLA DE DEPURACIÓN SERIAL / MQTT (Colapsable) -->
+        <section class="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden">
+            <button id="toggle-console" type="button" class="w-full px-5 py-3 flex items-center justify-between text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors cursor-pointer">
+                <span class="flex items-center gap-2 font-mono-tech">
+                    <span class="text-cyan-400">&gt;_</span> Monitor de Tráfico MQTT (Debug)
+                </span>
+                <span id="console-arrow" class="text-slate-500">▼</span>
+            </button>
+            <div id="console-body" class="border-t border-slate-800 p-4 space-y-2">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-[11px] text-slate-500">Registro de paquetes enviados y recibidos</span>
+                    <button id="clear-console" type="button" class="text-[11px] text-slate-400 hover:text-white underline cursor-pointer">Limpiar</button>
+                </div>
+                <div id="log-container" class="h-36 overflow-y-auto bg-black/60 rounded-lg p-3 font-mono-tech text-xs space-y-1.5 text-slate-300 border border-slate-800/80">
+                    <div class="text-slate-500">[Sistema] Listo. Configurá el broker o activá el Modo Simulación.</div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Pie de página -->
+    <footer class="max-w-2xl mx-auto w-full text-center pt-6 pb-2 text-xs text-slate-500">
+        Trabajo Práctico de Computadoras y Robótica • IoT MQTT Dashboard
+    </footer>
+
+    <!-- Lógica de Conexión MQTT y Control -->
+    <script>
+        // Variables de estado global
+        let mqttClient = null;
+        let isConnected = false;
+        let isSimulationMode = false;
+        let simulationInterval = null;
+
+        // Referencias a elementos del DOM
+        const brokerHostInput = document.getElementById('broker-host');
+        const brokerPortInput = document.getElementById('broker-port');
+        const topicTempInput = document.getElementById('topic-temp');
+        const topicServoInput = document.getElementById('topic-servo');
+        
+        const btnConnect = document.getElementById('btn-connect');
+        const btnAbrir = document.getElementById('btn-abrir');
+        const btnCerrar = document.getElementById('btn-cerrar');
+        const simToggle = document.getElementById('sim-toggle');
+
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const tempValueEl = document.getElementById('temp-value');
+        const displayTempTopic = document.getElementById('display-temp-topic');
+        const displayServoTopic = document.getElementById('display-servo-topic');
+        const servoLastState = document.getElementById('servo-last-state');
+        
+        const logContainer = document.getElementById('log-container');
+        const toggleConsoleBtn = document.getElementById('toggle-console');
+        const consoleBody = document.getElementById('console-body');
+        const consoleArrow = document.getElementById('console-arrow');
+        const clearConsoleBtn = document.getElementById('clear-console');
+
+        // Función para mostrar notificaciones no intrusivas
+        function showToast(message, type = 'info') {
+            const toastBox = document.getElementById('toast-box');
+            const toastMessage = document.getElementById('toast-message');
+            const toastIcon = document.getElementById('toast-icon');
+
+            toastMessage.textContent = message;
+            toastBox.classList.remove('hidden', 'border-cyan-500', 'border-emerald-500', 'border-rose-500', 'border-amber-500');
+
+            if (type === 'success') {
+                toastBox.classList.add('border-emerald-500');
+                toastIcon.textContent = '✅';
+            } else if (type === 'error') {
+                toastBox.classList.add('border-rose-500');
+                toastIcon.textContent = '⚠️';
+            } else if (type === 'sim') {
+                toastBox.classList.add('border-amber-500');
+                toastIcon.textContent = '🧪';
+            } else {
+                toastBox.classList.add('border-cyan-500');
+                toastIcon.textContent = 'ℹ️';
+            }
+
+            clearTimeout(window.toastTimeout);
+            window.toastTimeout = setTimeout(() => {
+                toastBox.classList.add('hidden');
+            }, 3500);
+        }
+
+        // Función para agregar registros al monitor MQTT
+        function addLog(text, type = 'info') {
+            const time = new Date().toLocaleTimeString('es-AR', { hour12: false });
+            const line = document.createElement('div');
+            
+            let colorClass = 'text-slate-300';
+            if (type === 'rx') colorClass = 'text-cyan-400';
+            if (type === 'tx') colorClass = 'text-emerald-400';
+            if (type === 'err') colorClass = 'text-rose-400';
+            if (type === 'warn') colorClass = 'text-amber-400';
+
+            line.className = colorClass;
+            line.textContent = `[${time}] ${text}`;
+            logContainer.appendChild(line);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        // Actualizar indicadores visuales de estado de red
+        function updateConnectionUI(state) {
+            statusDot.classList.remove('bg-rose-500', 'bg-emerald-500', 'bg-amber-500', 'status-pulse');
+            
+            if (state === 'connected') {
+                isConnected = true;
+                statusDot.classList.add('bg-emerald-500', 'status-pulse');
+                statusText.textContent = 'Conectado al Broker MQTT';
+                statusText.className = 'text-xs sm:text-sm font-semibold text-emerald-400';
+                btnConnect.textContent = 'Desconectar';
+                btnConnect.classList.remove('bg-cyan-600', 'hover:bg-cyan-500');
+                btnConnect.classList.add('bg-rose-600', 'hover:bg-rose-500');
+            } else if (state === 'connecting') {
+                statusDot.classList.add('bg-amber-500', 'status-pulse');
+                statusText.textContent = 'Conectando...';
+                statusText.className = 'text-xs sm:text-sm font-semibold text-amber-400';
+            } else if (state === 'simulation') {
+                isConnected = false;
+                statusDot.classList.add('bg-amber-500', 'status-pulse');
+                statusText.textContent = 'Modo Simulación Activo (Sin Broker)';
+                statusText.className = 'text-xs sm:text-sm font-semibold text-amber-400';
+                btnConnect.textContent = 'Conectar al Broker';
+                btnConnect.classList.remove('bg-rose-600', 'hover:bg-rose-500');
+                btnConnect.classList.add('bg-cyan-600', 'hover:bg-cyan-500');
+            } else {
+                isConnected = false;
+                statusDot.classList.add('bg-rose-500');
+                statusText.textContent = 'Desconectado del Broker';
+                statusText.className = 'text-xs sm:text-sm font-semibold text-slate-300';
+                btnConnect.textContent = 'Conectar al Broker';
+                btnConnect.classList.remove('bg-rose-600', 'hover:bg-rose-500');
+                btnConnect.classList.add('bg-cyan-600', 'hover:bg-cyan-500');
+            }
+        }
+
+        // Sincronizar etiquetas de tópicos en tiempo real cuando el alumno los edita
+        topicTempInput.addEventListener('input', () => {
+            displayTempTopic.textContent = topicTempInput.value || 'sin/topico';
+        });
+        topicServoInput.addEventListener('input', () => {
+            displayServoTopic.textContent = topicServoInput.value || 'sin/topico';
+        });
+
+        // Conectar o desconectar del Broker MQTT
+        function toggleMQTTConnection() {
+            if (isSimulationMode) {
+                simToggle.checked = false;
+                toggleSimulation(false);
+            }
+
+            if (isConnected && mqttClient) {
+                mqttClient.end();
+                mqttClient = null;
+                updateConnectionUI('disconnected');
+                addLog('Desconectado manualmente del broker.', 'warn');
+                showToast('Desconectado del broker MQTT');
+                return;
+            }
+
+            const host = brokerHostInput.value.trim();
+            const port = parseInt(brokerPortInput.value.trim(), 10);
+            const tempTopic = topicTempInput.value.trim();
+
+            if (!host || !port || !tempTopic) {
+                showToast('Por favor completá la dirección, puerto y tópicos.', 'error');
+                return;
+            }
+
+            // Determinar protocolo ws:// o wss:// según puerto o contexto HTTPS
+            const isSecurePage = window.location.protocol === 'https:';
+            const protocol = (port === 8084 || port === 8884 || isSecurePage) ? 'wss' : 'ws';
+            const connectUrl = `${protocol}://${host}:${port}/mqtt`;
+            const clientId = 'tp_rodriguez_' + Math.random().toString(16).substring(2, 8);
+
+            updateConnectionUI('connecting');
+            addLog(`Intentando conectar a ${connectUrl} (ID: ${clientId})...`);
+
+            try {
+                mqttClient = mqtt.connect(connectUrl, {
+                    clientId: clientId,
+                    clean: true,
+                    connectTimeout: 5000,
+                    reconnectPeriod: 0 // Evitar bucles infinitos si el alumno pone mal la IP
+                });
+
+                mqttClient.on('connect', () => {
+                    updateConnectionUI('connected');
+                    addLog(`Conexión exitosa con ${host}:${port}`, 'tx');
+                    showToast('¡Conectado al Broker MQTT!', 'success');
+
+                    // Suscribirse al tópico de temperatura
+                    mqttClient.subscribe(tempTopic, (err) => {
+                        if (!err) {
+                            addLog(`Suscrito al tópico: "${tempTopic}"`, 'rx');
+                        } else {
+                            addLog(`Error al suscribirse: ${err.message}`, 'err');
+                        }
+                    });
+                });
+
+                mqttClient.on('message', (topic, message) => {
+                    const payload = message.toString();
+                    addLog(`RX [${topic}]: ${payload}`, 'rx');
+
+                    if (topic === topicTempInput.value.trim()) {
+                        // Limpiar unidad si el microcontrolador ya envía "24.5 C" o similar
+                        const numericValue = parseFloat(payload.replace(',', '.'));
+                        if (!isNaN(numericValue)) {
+                            tempValueEl.textContent = numericValue.toFixed(1);
+                        } else {
+                            tempValueEl.textContent = payload;
+                        }
+                    }
+                });
+
+                mqttClient.on('error', (err) => {
+                    addLog(`Error de conexión: ${err.message}`, 'err');
+                    showToast('Error al conectar con el Broker MQTT', 'error');
+                    if (mqttClient) mqttClient.end();
+                    updateConnectionUI('disconnected');
+                });
+
+                mqttClient.on('close', () => {
+                    if (isConnected) {
+                        addLog('Se cerró la conexión con el broker.', 'warn');
+                        updateConnectionUI('disconnected');
+                    }
+                });
+
+            } catch (error) {
+                addLog(`Excepción: ${error.message}`, 'err');
+                updateConnectionUI('disconnected');
+            }
+        }
+
+        // Publicar comando al tópico del servo ("1" para Abrir, "0" para Cerrar)
+        function publishServoCommand(payload, actionLabel) {
+            const servoTopic = topicServoInput.value.trim();
+
+            if (!servoTopic) {
+                showToast('Ingresá el tópico del servo primero.', 'error');
+                return;
+            }
+
+            if (isSimulationMode) {
+                addLog(`TX [SIMULACIÓN -> ${servoTopic}]: "${payload}" (${actionLabel})`, 'tx');
+                servoLastState.textContent = `${actionLabel.toUpperCase()} (enviado "${payload}")`;
+                servoLastState.className = payload === '1' 
+                    ? 'font-mono-tech font-bold text-emerald-400' 
+                    : 'font-mono-tech font-bold text-rose-400';
+                showToast(`Simulación: "${payload}" enviado (${actionLabel})`, 'sim');
+                return;
+            }
+
+            if (!isConnected || !mqttClient) {
+                showToast('Conectate al broker o activá el Modo Simulación.', 'error');
+                addLog(`Intento fallido de enviar "${payload}": sin conexión.`, 'err');
+                return;
+            }
+
+            mqttClient.publish(servoTopic, payload, { qos: 0, retain: false }, (err) => {
+                if (err) {
+                    addLog(`Error publicando en ${servoTopic}: ${err.message}`, 'err');
+                    showToast('Error al enviar comando al servo', 'error');
+                } else {
+                    addLog(`TX [${servoTopic}]: "${payload}" (${actionLabel})`, 'tx');
+                    servoLastState.textContent = `${actionLabel.toUpperCase()} (enviado "${payload}")`;
+                    servoLastState.className = payload === '1' 
+                        ? 'font-mono-tech font-bold text-emerald-400' 
+                        : 'font-mono-tech font-bold text-rose-400';
+                    showToast(`Comando "${payload}" (${actionLabel}) enviado`, 'success');
+                }
+            });
+        }
+
+        // Gestión del Modo Simulación (para probar sin placa física)
+        function toggleSimulation(enabled) {
+            isSimulationMode = enabled;
+            clearInterval(simulationInterval);
+
+            if (enabled) {
+                if (isConnected && mqttClient) {
+                    mqttClient.end();
+                    mqttClient = null;
+                }
+                updateConnectionUI('simulation');
+                addLog('Modo Simulación activado. Generando datos de temperatura...', 'warn');
+                showToast('Modo Simulación activado', 'sim');
+
+                // Generar primera lectura inmediata
+                let simulatedTemp = 23.5;
+                tempValueEl.textContent = simulatedTemp.toFixed(1);
+
+                simulationInterval = setInterval(() => {
+                    const delta = (Math.random() - 0.5) * 0.8;
+                    simulatedTemp = Math.max(15, Math.min(38, simulatedTemp + delta));
+                    const formatted = simulatedTemp.toFixed(1);
+                    tempValueEl.textContent = formatted;
+                    addLog(`RX [SIMULACIÓN -> ${topicTempInput.value}]: ${formatted}`, 'rx');
+                }, 3000);
+            } else {
+                updateConnectionUI('disconnected');
+                tempValueEl.textContent = '--';
+                addLog('Modo Simulación desactivado.', 'info');
+            }
+        }
+
+        // Eventos de botones e interfaz
+        btnConnect.addEventListener('click', toggleMQTTConnection);
+
+        btnAbrir.addEventListener('click', () => {
+            publishServoCommand('1', 'Abrir');
+        });
+
+        btnCerrar.addEventListener('click', () => {
+            publishServoCommand('0', 'Cerrar');
+        });
+
+        simToggle.addEventListener('change', (e) => {
+            toggleSimulation(e.target.checked);
+        });
+
+        // Colapsar / expandir consola de depuración
+        toggleConsoleBtn.addEventListener('click', () => {
+            const isHidden = consoleBody.classList.toggle('hidden');
+            consoleArrow.textContent = isHidden ? '▶' : '▼';
+        });
+
+        clearConsoleBtn.addEventListener('click', () => {
+            logContainer.innerHTML = '<div class="text-slate-500">[Sistema] Registro limpiado.</div>';
+        });
+    </script>
+</body>
+</html>
